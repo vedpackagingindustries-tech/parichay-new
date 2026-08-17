@@ -23,10 +23,13 @@ import {
   ListPlus,
   ArrowLeft,
   Check,
-  X
+  X,
+  Printer,
+  MessageSquare
 } from "lucide-react";
 import { Order, Advertisement } from "../types";
 import PrintProduction from "./PrintProduction";
+import InvoicePDF from "./InvoicePDF";
 
 interface AdminPanelProps {
   onLogout?: () => void;
@@ -40,16 +43,19 @@ export default function AdminPanel() {
   const [loginError, setLoginError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Dashboard Tabs: 'orders' | 'print' | 'configs' | 'masters' | 'settings' | 'fields'
-  const [activeTab, setActiveTab] = useState<"orders" | "print" | "configs" | "masters" | "settings" | "fields">("orders");
+  // Dashboard Tabs: 'orders' | 'print' | 'configs' | 'masters' | 'settings' | 'fields' | 'whatsapp_logs'
+  const [activeTab, setActiveTab] = useState<"orders" | "print" | "configs" | "masters" | "settings" | "fields" | "whatsapp_logs">("orders");
 
   // Admin Data State
   const [orders, setOrders] = useState<Order[]>([]);
+  const [whatsappLogs, setWhatsappLogs] = useState<any[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "PAID" | "SUBMITTED" | "REJECTED" | "PENDING">("ALL");
   const [advertisements, setAdvertisements] = useState<Advertisement[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
 
   // Search/Filters State
   const [searchQuery, setSearchQuery] = useState("");
+  const [waSearch, setWaSearch] = useState("");
 
   // Masters configuration local lists
   const [districts, setDistricts] = useState<any[]>([]);
@@ -61,6 +67,13 @@ export default function AdminPanel() {
 
   // Selected Order Detail Modal
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [showAdminInvoice, setShowAdminInvoice] = useState<boolean>(false);
+
+  // Reject Payment Modal states
+  const [rejectModalOpen, setRejectModalOpen] = useState<boolean>(false);
+  const [rejectingOrderId, setRejectingOrderId] = useState<string | null>(null);
+  const [selectedRejectReason, setSelectedRejectReason] = useState<"Invalid UTR" | "Low Amount" | "Incorrect/Blank Screenshot" | "Custom">("Invalid UTR");
+  const [customRejectReason, setCustomRejectReason] = useState<string>("");
 
   // Masters insertion forms
   const [newDistrict, setNewDistrict] = useState({ name_en: "", name_hi: "" });
@@ -535,6 +548,13 @@ export default function AdminPanel() {
         setAdvertisements(data);
       }
 
+      // 2.5 Fetch WhatsApp Logs
+      const resLogs = await fetch("/api/admin/whatsapp-logs", { headers });
+      if (resLogs.ok) {
+        const logsData = await resLogs.json();
+        setWhatsappLogs(logsData);
+      }
+
       // 3. Fetch Master Lists
       const resMasters = await fetch("/api/masters");
       if (resMasters.ok) {
@@ -603,10 +623,42 @@ export default function AdminPanel() {
     }
   }, [isLoggedIn, token, activeTab]);
 
+  // Trigger custom Reject Payment Modal
+  const triggerRejectOrder = (orderId: string) => {
+    setRejectingOrderId(orderId);
+    setSelectedRejectReason("Invalid UTR");
+    setCustomRejectReason("");
+    setRejectModalOpen(true);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!rejectingOrderId) return;
+    let finalReason = "";
+    if (selectedRejectReason === "Invalid UTR") {
+      finalReason = "अमान्य संदर्भ संख्या (UTR) / बैंक रिकॉर्ड में भुगतान नहीं मिला।";
+    } else if (selectedRejectReason === "Low Amount") {
+      finalReason = "भुगतान राशि अधूरी है। कृपया पूरे विज्ञापन शुल्क का सही भुगतान करें।";
+    } else if (selectedRejectReason === "Incorrect/Blank Screenshot") {
+      finalReason = "स्क्रीनशॉट अस्पष्ट या खाली है। कृपया सही भुगतान रसीद अपलोड करें।";
+    } else {
+      finalReason = customRejectReason.trim() || "अमान्य संदर्भ संख्या (UTR) / भुगतान अमान्य है।";
+    }
+
+    setRejectModalOpen(false);
+    await executeVerifyOrder(rejectingOrderId, "REJECTED", finalReason);
+  };
+
   // Payment Verification API Trigger (PAID / REJECTED)
   const handleVerifyOrder = async (orderId: string, status: "PAID" | "REJECTED") => {
-    if (!window.confirm(`क्या आप ऑर्डर ${orderId} को ${status === "PAID" ? "स्वीकृत" : "अस्वीकृत"} करना चाहते हैं?`)) return;
+    if (status === "REJECTED") {
+      triggerRejectOrder(orderId);
+    } else {
+      if (!window.confirm(`क्या आप ऑर्डर ${orderId} को स्वीकृत करना चाहते हैं?`)) return;
+      await executeVerifyOrder(orderId, "PAID", "");
+    }
+  };
 
+  const executeVerifyOrder = async (orderId: string, status: "PAID" | "REJECTED", reason: string) => {
     try {
       const res = await fetch(`/api/admin/orders/${orderId}/verify`, {
         method: "POST",
@@ -614,7 +666,7 @@ export default function AdminPanel() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ status })
+        body: JSON.stringify({ status, reason })
       });
 
       if (res.ok) {
@@ -718,6 +770,12 @@ export default function AdminPanel() {
 
   // Parse and match query criteria (supports multi-value searches like "रायपुर + 001")
   const filteredOrders = orders.filter((order) => {
+    // 1. Status Filter
+    if (statusFilter !== "ALL" && order.payment_status !== statusFilter) {
+      return false;
+    }
+
+    // 2. Search Query
     if (!searchQuery.trim()) return true;
 
     const parts = searchQuery.split("+").map((p) => p.trim().toLowerCase());
@@ -1087,6 +1145,7 @@ export default function AdminPanel() {
         {[
           { id: "orders", label: "प्रविष्टियाँ एवं आर्डर", icon: FileSpreadsheet },
           { id: "print", label: "प्रिंट प्रोडक्शन", icon: Grid },
+          { id: "whatsapp_logs", label: "WhatsApp नोटिफिकेशन लॉग्स", icon: MessageSquare },
           { id: "configs", label: "प्रकाशन कॉन्फ़िगरेशन (Super Admin)", icon: Layers },
           { id: "fields", label: "फ़ील्ड बिल्डर (Fields)", icon: ListPlus },
           { id: "masters", label: "मास्टर्स कॉन्फ़िगरेशन", icon: Database },
@@ -1123,24 +1182,53 @@ export default function AdminPanel() {
       {/* Tab 1: Orders and Entries management */}
       {!isLoadingData && activeTab === "orders" && (
         <div className="space-y-6">
-          {/* Advanced combined Search Box */}
-          <div className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm flex items-center gap-3">
-            <Search className="w-5 h-5 text-stone-400 shrink-0" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="संयुक्त खोज करें... उदा. 'रायपुर + 001' या 'राम कुमार + PAID' या 'परिचायिका'..."
-              className="w-full focus:outline-none text-stone-800 text-sm placeholder-stone-400"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="text-xs text-stone-400 hover:text-stone-600 bg-stone-100 px-2 py-1 rounded"
-              >
-                क्लियर
-              </button>
-            )}
+          {/* Advanced combined Search Box & Status Filter */}
+          <div className="space-y-4">
+            <div className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm flex items-center gap-3">
+              <Search className="w-5 h-5 text-stone-400 shrink-0" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="संयुक्त खोज करें... उदा. 'रायपुर + 001' या 'राम कुमार' या 'परिचायिका'..."
+                className="w-full focus:outline-none text-stone-800 text-sm placeholder-stone-400"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="text-xs text-stone-400 hover:text-stone-600 bg-stone-100 px-2 py-1 rounded"
+                >
+                  क्लियर
+                </button>
+              )}
+            </div>
+
+            {/* Status Filter Tabs/Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-stone-500 mr-2">भुगतान स्थिति से फ़िल्टर करें:</span>
+              {[
+                { key: "ALL", label: "सभी आर्डर", count: orders.length },
+                { key: "SUBMITTED", label: "⏳ सत्यापन लंबित", count: orders.filter(o => o.payment_status === "SUBMITTED").length },
+                { key: "PAID", label: "🟢 स्वीकृत (PAID)", count: orders.filter(o => o.payment_status === "PAID").length },
+                { key: "REJECTED", label: "🔴 अस्वीकृत (REJECTED)", count: orders.filter(o => o.payment_status === "REJECTED").length },
+                { key: "PENDING", label: "⚪ अधूरा / PENDING", count: orders.filter(o => o.payment_status === "PENDING").length },
+              ].map((btn) => (
+                <button
+                  key={btn.key}
+                  onClick={() => setStatusFilter(btn.key as any)}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    statusFilter === btn.key
+                      ? "bg-stone-900 border-stone-900 text-white shadow-sm"
+                      : "bg-white hover:bg-stone-50 text-stone-700 border-stone-200"
+                  }`}
+                >
+                  {btn.label}
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${statusFilter === btn.key ? "bg-white/20 text-white" : "bg-stone-100 text-stone-600 font-black"}`}>
+                    {btn.count}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Orders Listing Grid/Table */}
@@ -1244,6 +1332,125 @@ export default function AdminPanel() {
       {/* Tab 2: Print Production Mount */}
       {!isLoadingData && activeTab === "print" && (
         <PrintProduction advertisements={advertisements} />
+      )}
+
+      {/* Tab 2.1: WhatsApp Notification Logs */}
+      {!isLoadingData && activeTab === "whatsapp_logs" && (
+        <div className="space-y-6">
+          <div className="bg-white border border-stone-200 rounded-xl p-5 shadow-sm">
+            <h3 className="text-base font-bold text-stone-800 mb-2 flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-emerald-600" />
+              WhatsApp स्वचालित सूचना रिकॉर्ड (WhatsApp Logs)
+            </h3>
+            <p className="text-xs text-stone-500">
+              प्रविष्टियाँ सबमिट होने, स्वीकृत होने या अस्वीकृत होने पर कस्टमर्स एवं एडमिन को भेजे गए सभी स्वचालित व्हाट्सएप संदेशों का विवरण यहाँ देख सकते हैं।
+            </p>
+          </div>
+
+          {/* Search Box within logs */}
+          <div className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm flex items-center gap-3">
+            <Search className="w-5 h-5 text-stone-400 shrink-0" />
+            <input
+              type="text"
+              value={waSearch}
+              onChange={(e) => setWaSearch(e.target.value)}
+              placeholder="नाम, नंबर, आर्डर ID या संदेश सामग्री से खोजें..."
+              className="w-full focus:outline-none text-stone-800 text-sm placeholder-stone-400"
+            />
+            {waSearch && (
+              <button
+                onClick={() => setWaSearch("")}
+                className="text-xs text-stone-400 hover:text-stone-600 bg-stone-100 px-2 py-1 rounded"
+              >
+                क्लियर
+              </button>
+            )}
+          </div>
+
+          {/* Logs List */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {whatsappLogs
+              .filter((log) => {
+                if (!waSearch.trim()) return true;
+                const query = waSearch.toLowerCase();
+                return (
+                  log.customer_name?.toLowerCase().includes(query) ||
+                  log.phone?.toLowerCase().includes(query) ||
+                  log.order_id?.toLowerCase().includes(query) ||
+                  log.status?.toLowerCase().includes(query) ||
+                  log.message?.toLowerCase().includes(query)
+                );
+              })
+              .map((log) => (
+                <div key={log.id} className="bg-stone-50 border border-stone-200 rounded-xl p-5 shadow-sm flex flex-col justify-between space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-bold text-stone-800 text-sm">{log.customer_name}</h4>
+                        <p className="text-xs text-emerald-600 font-mono font-bold mt-0.5">{log.phone}</p>
+                      </div>
+                      <span className={`text-[10px] px-2 py-1 rounded-full font-bold border ${
+                        log.status?.includes("ADMIN")
+                          ? "bg-stone-100 text-stone-700 border-stone-200"
+                          : log.status === "PAID"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                          : log.status === "REJECTED"
+                          ? "bg-red-50 text-red-700 border-red-100"
+                          : "bg-amber-50 text-amber-700 border-amber-100"
+                      }`}>
+                        {log.status === "PAID" ? "स्वीकृत (PAID)" : log.status === "REJECTED" ? "अस्वीकृत (REJECTED)" : log.status === "SUBMITTED" ? "सबमिट" : log.status}
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-stone-400 flex items-center gap-1.5 font-mono">
+                      <span>ऑर्डर ID: <b>{log.order_id}</b></span>
+                      <span>•</span>
+                      <span>{new Date(log.created_at).toLocaleString("hi-IN")}</span>
+                    </div>
+
+                    {/* Chat Bubble style message rendering */}
+                    <div className="bg-white border border-stone-150 rounded-lg p-3.5 text-xs text-stone-700 whitespace-pre-wrap font-sans leading-relaxed max-h-48 overflow-y-auto">
+                      {log.message}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-2 border-t border-stone-250/50">
+                    <button
+                      onClick={() => {
+                        const matchedOrder = orders.find((o) => o.order_id === log.order_id);
+                        if (matchedOrder) {
+                          setSelectedOrder(matchedOrder);
+                          setActiveTab("orders");
+                        } else {
+                          alert("ऑर्डर विवरण नहीं मिला।");
+                        }
+                      }}
+                      className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      संबद्ध ऑर्डर देखें
+                    </button>
+
+                    <a
+                      href={`https://wa.me/${log.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(log.message)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg flex items-center gap-1 cursor-pointer"
+                    >
+                      <MessageSquare className="w-3 h-3" />
+                      WhatsApp भेजें
+                    </a>
+                  </div>
+                </div>
+              ))}
+
+            {whatsappLogs.length === 0 && (
+              <div className="col-span-full text-center py-12 text-stone-400 bg-stone-50 rounded-xl border border-dashed border-stone-200">
+                कोई व्हाट्सएप नोटिफिकेशन लॉग उपलब्ध नहीं है।
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Tab: Super Admin Configurations */}
@@ -2132,134 +2339,263 @@ export default function AdminPanel() {
 
       {/* MODAL VIEW: Order details and Payment Verification Review */}
       {selectedOrder && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-2xl w-full p-6 space-y-6 relative max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto print:p-0 print:bg-white">
+          {showAdminInvoice ? (
+            <div className="bg-white rounded-3xl border border-stone-200 shadow-2xl max-w-3xl w-full p-6 relative max-h-[95vh] overflow-y-auto print:border-none print:shadow-none print:p-0 print:m-0 print:max-h-none">
+              <button
+                onClick={() => setShowAdminInvoice(false)}
+                className="absolute top-4 right-4 text-stone-500 hover:text-stone-700 font-bold text-sm bg-stone-100 hover:bg-stone-200 px-3 py-1.5 rounded-lg transition-all print:hidden cursor-pointer"
+              >
+                ✕ वापस आर्डर विवरण पर जाएँ
+              </button>
+              <div className="mt-8">
+                <InvoicePDF order={selectedOrder} onClose={() => setShowAdminInvoice(false)} />
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-2xl w-full p-6 space-y-6 relative max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setShowAdminInvoice(false);
+                }}
+                className="absolute top-4 right-4 text-stone-400 hover:text-stone-600 font-bold text-lg"
+              >
+                ✕
+              </button>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold px-2 py-0.5 bg-orange-100 text-orange-800 border border-orange-200 rounded">
+                    ऑर्डर विवरण समीक्षा
+                  </span>
+                  <span className="font-mono text-sm font-bold text-stone-500">ID: {selectedOrder.order_id}</span>
+                </div>
+                <p className="text-xs text-stone-400 mt-1">तिथी: {new Date(selectedOrder.created_at).toLocaleString("hi-IN")}</p>
+              </div>
+
+              {/* List of Advertisements inside this order */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold text-stone-400 uppercase tracking-widest">आदेश सूची सामग्री (Advertisements):</h4>
+                {selectedOrder.items?.map((it, idx) => (
+                  <div key={idx} className="border border-stone-200 rounded-xl p-4 bg-stone-50/50 space-y-3">
+                    <div className="flex justify-between items-center pb-2 border-b border-stone-200/60">
+                      <span className="text-sm font-black text-stone-800">
+                        {it.ad_type === "matrimony" ? "विवाह परिचय प्रविष्टि" : "व्यावसायिक विज्ञापन"}
+                      </span>
+                      <span className="font-mono font-bold text-orange-700 bg-orange-50 px-2 py-0.5 text-xs rounded border border-orange-100">
+                        {it.ad_number}
+                      </span>
+                    </div>
+
+                    {/* Render profile / details */}
+                    {it.ad_type === "matrimony" && it.matrimonyDetails && (
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-stone-600">
+                        <p><span className="font-bold text-stone-800">नाम:</span> {it.matrimonyDetails.name}</p>
+                        <p><span className="font-bold text-stone-800">जन्म तिथि:</span> {it.matrimonyDetails.dob}</p>
+                        <p><span className="font-bold text-stone-800">गोत्र:</span> {it.matrimonyDetails.gotra}</p>
+                        <p><span className="font-bold text-stone-800">रक्त समूह:</span> {it.matrimonyDetails.blood_group}</p>
+                        <p className="col-span-2"><span className="font-bold text-stone-800">शिक्षा:</span> {it.matrimonyDetails.education}</p>
+                        <p className="col-span-2"><span className="font-bold text-stone-800">व्यवसाय:</span> {it.matrimonyDetails.occupation}</p>
+                        {it.matrimonyDetails.photoUrl && (
+                          <div className="col-span-2 mt-2">
+                            <span className="font-bold text-stone-800 block mb-1">अपलोडेड फोटो:</span>
+                            <img
+                              src={it.matrimonyDetails.photoUrl}
+                              alt="Uploaded"
+                              className="h-28 w-auto rounded object-contain border border-stone-200 bg-white p-1"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        )}
+                        {it.matrimonyDetails.biodataUrl && (
+                          <div className="col-span-2 mt-1">
+                            <span className="font-bold text-stone-800">बायोडाटा फ़ाइल: </span>
+                            <a href={it.matrimonyDetails.biodataUrl} target="_blank" rel="noreferrer" className="text-orange-600 font-bold underline hover:text-orange-700">
+                              बायोडाटा देखने के लिए क्लिक करें
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {it.ad_type === "business" && it.businessDetails && (
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-stone-600">
+                        <p><span className="font-bold text-stone-800">व्यवसाय नाम:</span> {it.businessDetails.businessName}</p>
+                        <p><span className="font-bold text-stone-800">मालिक:</span> {it.businessDetails.ownerName}</p>
+                        <p className="col-span-2"><span className="font-bold text-stone-800">विवरण:</span> {it.businessDetails.businessDesc}</p>
+                        <p className="col-span-2"><span className="font-bold text-stone-800">सेवाएं:</span> {it.businessDetails.productsServices}</p>
+                        {it.businessDetails.specialOffer && <p className="col-span-2 text-red-600 font-semibold"><span className="font-bold text-stone-800">ऑफर:</span> {it.businessDetails.specialOffer}</p>}
+                        {it.businessDetails.logoUrl && (
+                          <div className="mt-2">
+                            <span className="font-bold text-stone-800 block mb-1">अपलोडेड लोगो:</span>
+                            <img src={it.businessDetails.logoUrl} alt="Logo" className="h-16 w-auto rounded object-contain" referrerPolicy="no-referrer" />
+                          </div>
+                        )}
+                        {it.businessDetails.readyAdUrl && (
+                          <div className="col-span-2 mt-1">
+                            <span className="font-bold text-stone-800">पहले से बना विज्ञापन: </span>
+                            <a href={it.businessDetails.readyAdUrl} target="_blank" rel="noreferrer" className="text-orange-600 font-bold underline hover:text-orange-700">
+                              फ़ाइल देखें
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Billing summary and Payment Reference details */}
+              <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 text-xs text-stone-600 space-y-2">
+                <div className="flex justify-between items-center">
+                  <p className="text-sm font-bold text-stone-800">कुल बिल राशि: <span className="text-orange-700 text-base font-black">₹{selectedOrder.total_amount.toLocaleString("en-IN")}.00</span></p>
+                  <button
+                    onClick={() => setShowAdminInvoice(true)}
+                    className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all print:hidden"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    पावती / Invoice देखें
+                  </button>
+                </div>
+                {selectedOrder.payment_ref && (
+                  <p><span className="font-bold text-stone-800">ग्राहक संदर्भ आईडी (Ref ID / UTR):</span> <span className="font-mono font-bold text-stone-900 bg-white border px-1.5 py-0.5 rounded">{selectedOrder.payment_ref}</span></p>
+                )}
+                {selectedOrder.payment_date && (
+                  <p><span className="font-bold text-stone-800">भुगतान तिथि:</span> {new Date(selectedOrder.payment_date).toLocaleString("hi-IN")}</p>
+                )}
+                {selectedOrder.payment_screenshot && (
+                  <div className="pt-2 border-t border-stone-200 mt-2">
+                    <span className="font-bold text-stone-800 block mb-1">भुगतान का स्क्रीनशॉट (Payment Screenshot):</span>
+                    <a href={selectedOrder.payment_screenshot} target="_blank" rel="noreferrer" className="inline-block relative group max-w-xs">
+                      <img
+                        src={selectedOrder.payment_screenshot}
+                        alt="Payment Screenshot"
+                        className="h-44 w-auto rounded object-contain border border-stone-300 hover:border-orange-500 bg-white p-1 transition-all"
+                        referrerPolicy="no-referrer"
+                      />
+                      <span className="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-bold group-hover:bg-orange-600">
+                        बड़ा देखने के लिए क्लिक करें 🔍
+                      </span>
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              {/* Verify Actions */}
+              {selectedOrder.payment_status === "SUBMITTED" && (
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => handleVerifyOrder(selectedOrder.order_id, "PAID")}
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    भुगतान स्वीकृत करें (Mark PAID)
+                  </button>
+                  <button
+                    onClick={() => handleVerifyOrder(selectedOrder.order_id, "REJECTED")}
+                    className="bg-red-100 hover:bg-red-200 text-red-700 font-bold py-2.5 px-6 rounded-lg text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <XCircle className="w-4 h-4" />
+                    अस्वीकृत करें (Reject)
+                  </button>
+                </div>
+              )}
+
+              {selectedOrder.payment_status === "PAID" && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold p-3 rounded-lg text-center flex items-center justify-center gap-1.5">
+                  <CheckCircle className="w-4 h-4 text-emerald-600" />
+                  यह आर्डर स्वीकृत एवं PAID है। सत्यापन कर्ता: {selectedOrder.verified_by || "एडमिन"}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Reject Payment Custom Modal */}
+      {rejectModalOpen && (
+        <div className="fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-stone-200 rounded-3xl max-w-md w-full p-6 md:p-8 shadow-2xl relative space-y-6">
             <button
-              onClick={() => setSelectedOrder(null)}
-              className="absolute top-4 right-4 text-stone-400 hover:text-stone-600 font-bold text-lg"
+              onClick={() => setRejectModalOpen(false)}
+              className="absolute top-4 right-4 text-stone-400 hover:text-stone-600 cursor-pointer p-1 rounded-full hover:bg-stone-50 transition-colors"
             >
-              ✕
+              <X className="w-5 h-5" />
             </button>
 
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold px-2 py-0.5 bg-orange-100 text-orange-800 border border-orange-200 rounded">
-                  ऑर्डर विवरण समीक्षा
-                </span>
-                <span className="font-mono text-sm font-bold text-stone-500">ID: {selectedOrder.order_id}</span>
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 rounded-full bg-red-50 border border-red-200 flex items-center justify-center mx-auto text-red-600">
+                <XCircle className="w-6 h-6" />
               </div>
-              <p className="text-xs text-stone-400 mt-1">तिथी: {new Date(selectedOrder.created_at).toLocaleString("hi-IN")}</p>
+              <h3 className="text-lg font-black text-stone-900">भुगतान अस्वीकार करें (Reject Payment)</h3>
+              <p className="text-xs text-stone-500">अस्वीकृति का मुख्य कारण चुनें, जो स्वचालित रूप से ग्राहक के व्हाट्सएप पर भेजा जाएगा।</p>
             </div>
 
-            {/* List of Advertisements inside this order */}
             <div className="space-y-4">
-              <h4 className="text-xs font-bold text-stone-400 uppercase tracking-widest">आदेश सूची सामग्री (Advertisements):</h4>
-              {selectedOrder.items?.map((it, idx) => (
-                <div key={idx} className="border border-stone-200 rounded-xl p-4 bg-stone-50/50 space-y-3">
-                  <div className="flex justify-between items-center pb-2 border-b border-stone-200/60">
-                    <span className="text-sm font-black text-stone-800">
-                      {it.ad_type === "matrimony" ? "विवाह परिचय प्रविष्टि" : "व्यावसायिक विज्ञापन"}
-                    </span>
-                    <span className="font-mono font-bold text-orange-700 bg-orange-50 px-2 py-0.5 text-xs rounded border border-orange-100">
-                      {it.ad_number}
-                    </span>
-                  </div>
-
-                  {/* Render profile / details */}
-                  {it.ad_type === "matrimony" && it.matrimonyDetails && (
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-stone-600">
-                      <p><span className="font-bold text-stone-800">नाम:</span> {it.matrimonyDetails.name}</p>
-                      <p><span className="font-bold text-stone-800">जन्म तिथि:</span> {it.matrimonyDetails.dob}</p>
-                      <p><span className="font-bold text-stone-800">गोत्र:</span> {it.matrimonyDetails.gotra}</p>
-                      <p><span className="font-bold text-stone-800">रक्त समूह:</span> {it.matrimonyDetails.blood_group}</p>
-                      <p className="col-span-2"><span className="font-bold text-stone-800">शिक्षा:</span> {it.matrimonyDetails.education}</p>
-                      <p className="col-span-2"><span className="font-bold text-stone-800">व्यवसाय:</span> {it.matrimonyDetails.occupation}</p>
-                      {it.matrimonyDetails.photoUrl && (
-                        <div className="col-span-2 mt-2">
-                          <span className="font-bold text-stone-800 block mb-1">अपलोडेड फोटो:</span>
-                          <img
-                            src={it.matrimonyDetails.photoUrl}
-                            alt="Uploaded"
-                            className="h-28 w-auto rounded object-contain border border-stone-200 bg-white p-1"
-                            referrerPolicy="no-referrer"
-                          />
-                        </div>
-                      )}
-                      {it.matrimonyDetails.biodataUrl && (
-                        <div className="col-span-2 mt-1">
-                          <span className="font-bold text-stone-800">बायोडाटा फ़ाइल: </span>
-                          <a href={it.matrimonyDetails.biodataUrl} target="_blank" rel="noreferrer" className="text-orange-600 font-bold underline hover:text-orange-700">
-                            बायोडाटा देखने के लिए क्लिक करें
-                          </a>
-                        </div>
-                      )}
+              <label className="text-[10px] font-black uppercase tracking-wider text-stone-400 block">अस्वीकृति का मुख्य कारण</label>
+              
+              <div className="space-y-2.5">
+                {[
+                  { value: "Invalid UTR", label: "अमान्य UTR (Invalid UTR)", desc: "संदर्भ संख्या (UTR/Ref No) बैंक रिकॉर्ड में नहीं मिली।" },
+                  { value: "Low Amount", label: "अधूरी भुगतान राशि (Low Amount)", desc: "भुगतान की गई राशि विज्ञापन के वास्तविक मूल्य से कम है।" },
+                  { value: "Incorrect/Blank Screenshot", label: "गलत/अस्पष्ट स्क्रीनशॉट", desc: "अपलोड किया गया स्क्रीनशॉट गलत, अस्पष्ट या खाली है।" },
+                  { value: "Custom", label: "अन्य कोई कारण (Custom Reason)", desc: "स्वयं कोई अन्य कारण लिखना चाहते हैं।" }
+                ].map((reason) => (
+                  <label
+                    key={reason.value}
+                    onClick={() => setSelectedRejectReason(reason.value as any)}
+                    className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                      selectedRejectReason === reason.value
+                        ? "border-red-500 bg-red-50/40 shadow-xs"
+                        : "border-stone-200 hover:bg-stone-50"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="reject_reason"
+                      value={reason.value}
+                      checked={selectedRejectReason === reason.value}
+                      onChange={() => setSelectedRejectReason(reason.value as any)}
+                      className="mt-0.5 text-red-600 focus:ring-red-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-stone-900 block">{reason.label}</span>
+                      <span className="text-[10px] text-stone-500">{reason.desc}</span>
                     </div>
-                  )}
+                  </label>
+                ))}
+              </div>
 
-                  {it.ad_type === "business" && it.businessDetails && (
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-stone-600">
-                      <p><span className="font-bold text-stone-800">व्यवसाय नाम:</span> {it.businessDetails.businessName}</p>
-                      <p><span className="font-bold text-stone-800">मालिक:</span> {it.businessDetails.ownerName}</p>
-                      <p className="col-span-2"><span className="font-bold text-stone-800">विवरण:</span> {it.businessDetails.businessDesc}</p>
-                      <p className="col-span-2"><span className="font-bold text-stone-800">सेवाएं:</span> {it.businessDetails.productsServices}</p>
-                      {it.businessDetails.specialOffer && <p className="col-span-2 text-red-600 font-semibold"><span className="font-bold text-stone-800">ऑफर:</span> {it.businessDetails.specialOffer}</p>}
-                      {it.businessDetails.logoUrl && (
-                        <div className="mt-2">
-                          <span className="font-bold text-stone-800 block mb-1">अपलोडेड लोगो:</span>
-                          <img src={it.businessDetails.logoUrl} alt="Logo" className="h-16 w-auto rounded object-contain" referrerPolicy="no-referrer" />
-                        </div>
-                      )}
-                      {it.businessDetails.readyAdUrl && (
-                        <div className="col-span-2 mt-1">
-                          <span className="font-bold text-stone-800">पहले से बना विज्ञापन: </span>
-                          <a href={it.businessDetails.readyAdUrl} target="_blank" rel="noreferrer" className="text-orange-600 font-bold underline hover:text-orange-700">
-                            फ़ाइल देखें
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
+              {selectedRejectReason === "Custom" && (
+                <div className="space-y-1 animate-fadeIn">
+                  <label className="text-xs font-bold text-stone-600 block">अपना कारण विस्तार से लिखें *</label>
+                  <textarea
+                    required
+                    value={customRejectReason}
+                    onChange={(e) => setCustomRejectReason(e.target.value)}
+                    placeholder="जैसे: आपके द्वारा अपलोड किया गया स्क्रीनशॉट पुराना है..."
+                    className="w-full min-h-[80px] p-2.5 border border-stone-300 rounded-lg text-xs text-stone-800 bg-white placeholder-stone-400 outline-none focus:border-red-500"
+                  />
                 </div>
-              ))}
-            </div>
-
-            {/* Billing summary and Payment Reference details */}
-            <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 text-xs text-stone-600 space-y-2">
-              <p className="text-sm font-bold text-stone-800">कुल बिल राशि: <span className="text-orange-700 text-base font-black">₹{selectedOrder.total_amount.toLocaleString("en-IN")}.00</span></p>
-              {selectedOrder.payment_ref && (
-                <p><span className="font-bold text-stone-800">ग्राहक संदर्भ आईडी (Ref ID / UTR):</span> <span className="font-mono font-bold text-stone-900 bg-white border px-1.5 py-0.5 rounded">{selectedOrder.payment_ref}</span></p>
-              )}
-              {selectedOrder.payment_date && (
-                <p><span className="font-bold text-stone-800">भुगतान तिथि:</span> {new Date(selectedOrder.payment_date).toLocaleString("hi-IN")}</p>
               )}
             </div>
 
-            {/* Verify Actions */}
-            {selectedOrder.payment_status === "SUBMITTED" && (
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={() => handleVerifyOrder(selectedOrder.order_id, "PAID")}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  भुगतान स्वीकृत करें (Mark PAID)
-                </button>
-                <button
-                  onClick={() => handleVerifyOrder(selectedOrder.order_id, "REJECTED")}
-                  className="bg-red-100 hover:bg-red-200 text-red-700 font-bold py-2.5 px-6 rounded-lg text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  <XCircle className="w-4 h-4" />
-                  अस्वीकृत करें (Reject)
-                </button>
-              </div>
-            )}
-
-            {selectedOrder.payment_status === "PAID" && (
-              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold p-3 rounded-lg text-center flex items-center justify-center gap-1.5">
-                <CheckCircle className="w-4 h-4 text-emerald-600" />
-                यह आर्डर स्वीकृत एवं PAID है। सत्यापन कर्ता: {selectedOrder.verified_by || "एडमिन"}
-              </div>
-            )}
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setRejectModalOpen(false)}
+                className="flex-1 py-2.5 border border-stone-200 text-stone-600 font-bold rounded-xl text-xs hover:bg-stone-50 transition-all cursor-pointer"
+              >
+                रद्द करें
+              </button>
+              <button
+                onClick={handleConfirmReject}
+                disabled={selectedRejectReason === "Custom" && !customRejectReason.trim()}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs shadow-md transition-all cursor-pointer"
+              >
+                अस्वीकृति की पुष्टि करें
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -150,6 +150,7 @@ export interface Order {
   payment_status: "PENDING" | "SUBMITTED" | "PAID" | "REJECTED";
   payment_ref?: string;
   payment_date?: string;
+  payment_screenshot?: string;
   verified_by?: string;
   verification_time?: string;
   created_at: string;

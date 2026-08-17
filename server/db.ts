@@ -321,6 +321,20 @@ export async function initDatabase() {
       )
     `);
 
+    // 18.1 WhatsApp Notifications Log Table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS whatsapp_notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        customer_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        error_reason TEXT
+      )
+    `);
+
     // 19. Advertisement Counters (Race-condition safe auto numbering)
     db.run(`
       CREATE TABLE IF NOT EXISTS advertisement_counters (
@@ -375,6 +389,8 @@ export async function initDatabase() {
     db.run(`ALTER TABLE super_admins ADD COLUMN reset_token_expiry TEXT`, () => {});
     db.run(`ALTER TABLE matrimony_profiles ADD COLUMN extra_fields_json TEXT`, () => {});
     db.run(`ALTER TABLE business_advertisements ADD COLUMN extra_fields_json TEXT`, () => {});
+    db.run(`ALTER TABLE orders ADD COLUMN rejection_reason TEXT`, () => {});
+    db.run(`ALTER TABLE orders ADD COLUMN payment_screenshot TEXT`, () => {});
 
     // Create Indexes
     db.run(`CREATE INDEX IF NOT EXISTS idx_ad_number ON advertisements(ad_number)`);

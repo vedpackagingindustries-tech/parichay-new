@@ -1,5 +1,34 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Languages, Loader2 } from "lucide-react";
+import { Languages, Loader2, Mic, MicOff } from "lucide-react";
+
+export function formatDegreesToHindi(text: string): string {
+  if (!text) return text;
+  let result = text;
+  
+  const mappings = [
+    { keys: ["b\\.com", "bcom", "बीकॉम", "बी\\. कॉम", "बी\\. कॉम\\."], hindi: "बी.कॉम." },
+    { keys: ["m\\.a", "ma", "एमए", "एम\\. ए", "एम\\. ए\\."], hindi: "एम.ए." },
+    { keys: ["b\\.a", "ba", "बीए", "बी\\. ए", "बी\\. ए\\."], hindi: "बी.ए." },
+    { keys: ["bca", "बीसीए"], hindi: "बीसीए" },
+    { keys: ["mca", "एमसीए"], hindi: "एमसीए" },
+    { keys: ["mba", "एमबीए"], hindi: "एमबीए" },
+    { keys: ["b\\.sc", "bsc", "बीएससी", "बी\\. एससी", "बी\\. एससी\\."], hindi: "बी.एससी." },
+    { keys: ["m\\.sc", "msc", "एमएससी", "एम\\. एससी", "एम\\. एससी\\."], hindi: "एम.एससी." },
+    { keys: ["b\\.tech", "btech", "बीटेक", "बी\\. टेक", "बी\\. टेक\\."], hindi: "बी.टेक." },
+    { keys: ["m\\.tech", "mtech", "एमटेक", "एम\\. टेक", "एम\\. टेक\\."], hindi: "एम.टेक." },
+    { keys: ["ph\\.d", "phd", "पीएचडी", "पीएच\\. डी", "पीएच\\. डी\\."], hindi: "पीएच.डी." },
+    { keys: ["b\\.ed", "bed", "बीएड", "बी\\. एड", "बी\\. एड\\."], hindi: "बी.एड." }
+  ];
+
+  for (const map of mappings) {
+    for (const key of map.keys) {
+      const regex = new RegExp(`(?<=^|[^a-zA-Z\\u0900-\\u097F])${key}(?=$|[^a-zA-Z\\u0900-\\u097F])`, "gi");
+      result = result.replace(regex, map.hindi);
+    }
+  }
+
+  return result;
+}
 
 interface TransliteratedInputProps {
   id?: string;
@@ -25,7 +54,9 @@ export default function TransliteratedInput({
   const [localValue, setLocalValue] = useState(value);
   const [isTransliterating, setIsTransliterating] = useState(false);
   const [autoHindi, setAutoHindi] = useState(true);
+  const [isListening, setIsListening] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Sync from parent if changed externally (e.g. on reset or custom loading)
   useEffect(() => {
@@ -65,7 +96,7 @@ export default function TransliteratedInput({
                 if (data.result) {
                   const leadSpace = part.match(/^\s*/)?.[0] || "";
                   const trailSpace = part.match(/\s*$/)?.[0] || "";
-                  return leadSpace + data.result + trailSpace;
+                  return leadSpace + formatDegreesToHindi(data.result) + trailSpace;
                 }
               }
             } catch (err) {
@@ -74,7 +105,7 @@ export default function TransliteratedInput({
             return part;
           })
         );
-        const finalResult = convertedParts.join(",");
+        const finalResult = formatDegreesToHindi(convertedParts.join(","));
         setLocalValue(finalResult);
         onChange(finalResult);
         return;
@@ -88,8 +119,9 @@ export default function TransliteratedInput({
       if (res.ok) {
         const data = await res.json();
         if (data.result) {
-          setLocalValue(data.result);
-          onChange(data.result);
+          const finalResult = formatDegreesToHindi(data.result);
+          setLocalValue(finalResult);
+          onChange(finalResult);
         }
       }
     } catch (err) {
@@ -100,7 +132,8 @@ export default function TransliteratedInput({
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const val = e.target.value;
+    const rawVal = e.target.value;
+    const val = formatDegreesToHindi(rawVal);
     setLocalValue(val);
     onChange(val);
 
@@ -110,30 +143,110 @@ export default function TransliteratedInput({
       // Debounce the call to avoid hitting translation API too frequently
       timerRef.current = setTimeout(() => {
         performTransliteration(val);
-      }, 900);
+      }, 1500); // slightly longer debounce "thodda ruk kar" as requested
+    }
+  };
+
+  const handleBlur = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (autoHindi && localValue.trim().length > 0) {
+      performTransliteration(localValue);
+    }
+  };
+
+  const toggleVoiceInput = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("⚠️ आपका ब्राउज़र वॉयस टाइपिंग (Speech Recognition) का समर्थन नहीं करता है। कृपया गूगल क्रोम का उपयोग करें।");
+      return;
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "hi-IN"; // Hindi voice typing
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error", event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          const space = localValue.trim() ? " " : "";
+          const newVal = localValue + space + transcript;
+          setLocalValue(newVal);
+          onChange(newVal);
+          if (autoHindi) {
+            performTransliteration(newVal);
+          }
+        }
+      };
+
+      recognition.start();
+    } catch (err) {
+      console.error("Speech recognition failed to start:", err);
+      setIsListening(false);
     }
   };
 
   return (
-    <div className="w-full mb-4" id={id}>
-      <div className="flex justify-between items-center mb-1">
-        <label className="text-sm font-semibold text-stone-700 flex items-center gap-1.5">
-          {label} {required && <span className="text-red-500">*</span>}
+    <div className="w-full min-w-0 flex flex-col space-y-1.5" id={id}>
+      <div className="w-full flex flex-wrap items-center justify-between gap-1.5 min-w-0">
+        <label className="text-xs md:text-sm font-bold text-stone-700 flex items-center gap-1 min-w-0 break-words">
+          <span>{label}</span>
+          {required && <span className="text-red-500 font-bold shrink-0">*</span>}
         </label>
-        <button
-          type="button"
-          onClick={() => setAutoHindi(!autoHindi)}
-          className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 transition-all ${
-            autoHindi
-              ? "bg-orange-100 text-orange-700 border border-orange-200"
-              : "bg-stone-100 text-stone-500 border border-stone-200"
-          }`}
-          title="रोमन में टाइप करने पर स्वतः हिंदी में बदलने की व्यवस्था"
-        >
-          <Languages className="w-3.5 h-3.5" />
-          {autoHindi ? "हिंदी एक्टिव" : "नार्मल इंग्लिश"}
-          {isTransliterating && <Loader2 className="w-3 h-3 animate-spin text-orange-600" />}
-        </button>
+        
+        <div className="flex items-center gap-1.5">
+          {/* Voice Command Dictation Button */}
+          <button
+            type="button"
+            onClick={toggleVoiceInput}
+            className={`shrink-0 p-1.5 rounded-lg flex items-center justify-center transition-all cursor-pointer border ${
+              isListening
+                ? "bg-red-500 text-white border-red-600 animate-pulse"
+                : "bg-stone-50 text-stone-600 border-stone-200 hover:bg-stone-100"
+            }`}
+            title={isListening ? "सुनना बंद करें" : "बोलकर टाइप करें (Voice Typing)"}
+          >
+            {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAutoHindi(!autoHindi)}
+            className={`shrink-0 text-[11px] md:text-xs font-semibold px-2.5 py-1 rounded-full flex items-center gap-1 transition-all cursor-pointer select-none border ${
+              autoHindi
+                ? "bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100"
+                : "bg-stone-100 text-stone-600 border-stone-200 hover:bg-stone-200"
+            }`}
+            title="रोमन में टाइप करने पर स्वतः हिंदी में बदलने की व्यवस्था"
+          >
+            <Languages className="w-3.5 h-3.5 shrink-0" />
+            <span>{autoHindi ? "हिंदी चालू" : "इंग्लिश"}</span>
+            {isTransliterating && <Loader2 className="w-3 h-3 animate-spin text-orange-600 shrink-0" />}
+          </button>
+        </div>
       </div>
 
       {isTextArea ? (
@@ -141,16 +254,18 @@ export default function TransliteratedInput({
           rows={rows}
           value={localValue}
           onChange={handleInputChange}
-          placeholder={placeholder || `${label} रोमन में टाइप करें, वह हिंदी में बदल जायेगा (उदा. ram sahu -> राम साहू)...`}
-          className="w-full px-3 py-2 border border-stone-300 rounded-lg text-stone-800 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-[15px]"
+          onBlur={handleBlur}
+          placeholder={placeholder || `${label} रोमन में टाइप करें, वह हिंदी में बदल जायेगा या माइक बटन दबाकर बोलें...`}
+          className="w-full block box-border min-w-0 px-3.5 py-2.5 border border-stone-300 rounded-xl text-stone-800 bg-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-sm md:text-[15px] shadow-xs"
         />
       ) : (
         <input
           type="text"
           value={localValue}
           onChange={handleInputChange}
-          placeholder={placeholder || `${label} रोमन में टाइप करें (उदा. Raipur -> रायपुर)...`}
-          className="w-full px-3 py-2 border border-stone-300 rounded-lg text-stone-800 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-[15px]"
+          onBlur={handleBlur}
+          placeholder={placeholder || `${label} रोमन में लिखें या माइक बटन दबाकर बोलें...`}
+          className="w-full block box-border min-w-0 px-3.5 py-2.5 border border-stone-300 rounded-xl text-stone-800 bg-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-sm md:text-[15px] shadow-xs"
         />
       )}
     </div>

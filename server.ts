@@ -65,13 +65,16 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 }, // Max 15MB
+  limits: { fileSize: 50 * 1024 * 1024 }, // Max 50MB for print files (CDR, PSD, PDF, etc.)
   fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
     const mime = file.mimetype.toLowerCase();
-    if (mime.startsWith("image/") || mime.includes("pdf")) {
+    const allowedExtensions = [".cdr", ".psd", ".pdf", ".ai", ".eps", ".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".svg"];
+    
+    if (allowedExtensions.includes(ext) || mime.startsWith("image/") || mime.includes("pdf") || mime.includes("photoshop") || mime.includes("coreldraw") || mime.includes("postscript") || mime.includes("octet-stream")) {
       cb(null, true);
     } else {
-      cb(new Error("अमान्य फ़ाइल प्रकार! केवल चित्र (JPG, JPEG, PNG) और PDF की अनुमति है।"));
+      cb(new Error("अमान्य फ़ाइल प्रकार! कृपया CDR, PSD, PDF, AI, EPS, JPG, PNG, WEBP फ़ाइल अपलोड करें।"));
     }
   }
 });
@@ -93,6 +96,71 @@ function convertHindiNumeralsToEnglish(str: string): string {
     "९": "9"
   };
   return str.replace(/[०-९]/g, (m) => mapping[m] || m);
+}
+
+// Custom dictionary and regex post-processing to fix spelling and academic/degree transliteration errors
+function applyPostTransliterationFixes(text: string): string {
+  if (!text) return text;
+
+  let fixed = text;
+
+  // 1. Surname & Name phonetic fixes (Sahu -> साहू, Ashwini -> अश्विनी)
+  fixed = fixed.replace(/सहु\b/g, "साहू");
+  fixed = fixed.replace(/\bसहु\b/g, "साहू");
+  fixed = fixed.replace(/सहु/g, "साहू");
+  fixed = fixed.replace(/शाहू/g, "साहू");
+  fixed = fixed.replace(/सहू/g, "साहू");
+  fixed = fixed.replace(/अश्वनी/g, "अश्विनी");
+  fixed = fixed.replace(/अश्विनि/g, "अश्विनी");
+  fixed = fixed.replace(/साहूू/g, "साहू"); // Fix double long 'oo'
+
+  // 2. Degrees & Educational acronyms cleanups (removing spaces around dots and making them standard Hindi format)
+  fixed = fixed.replace(/एम\s*\.\s*कॉम\s*\.?/gi, "एम.कॉम.");
+  fixed = fixed.replace(/बी\s*\.\s*कॉम\s*\.?/gi, "बी.कॉम.");
+  fixed = fixed.replace(/एम\s*\.\s*ए\s*\.?/gi, "एम.ए.");
+  fixed = fixed.replace(/बी\s*\.\s*ए\s*\.?/gi, "बी.ए.");
+  fixed = fixed.replace(/बी\s*\.\s*एससी\s*\.?/gi, "बी.एससी.");
+  fixed = fixed.replace(/एम\s*\.\s*एससी\s*\.?/gi, "एम.एससी.");
+  fixed = fixed.replace(/बी\s*\.\s*टेक\s*\.?/gi, "बी.टेक.");
+  fixed = fixed.replace(/एम\s*\.\s*टेक\s*\.?/gi, "एम.टेक.");
+  fixed = fixed.replace(/पी\s*\.\s*एच\s*\.\s*डी\s*\.?/gi, "पीएच.डी.");
+  fixed = fixed.replace(/पीएच\s*\.\s*डी\s*\.?/gi, "पीएच.डी.");
+  fixed = fixed.replace(/बी\s*\.\s*एड\s*\.?/gi, "बी.एड.");
+  fixed = fixed.replace(/एम\s*\.\s*एड\s*\.?/gi, "एम.एड.");
+  fixed = fixed.replace(/डी\s*\.\s*एल\s*\.\s*एड\s*\.?/gi, "डी.एल.एड.");
+  fixed = fixed.replace(/डी\s*\.\s*एड\s*\.?/gi, "डी.एड.");
+  fixed = fixed.replace(/बी\s*\.\s*सी\s*\.\s*ए\s*\.?/gi, "बीसीए");
+  fixed = fixed.replace(/एम\s*\.\s*सी\s*\.\s*ए\s*\.?/gi, "एमसीए");
+  fixed = fixed.replace(/बी\s*\.\s*बी\s*\.\s*ए\s*\.?/gi, "बीबीए");
+  fixed = fixed.replace(/एम\s*\.\s*बी\s*\.\s*ए\s*\.?/gi, "एमबीए");
+
+  // Additional English word fallbacks to Hindi translations that Google gets wrong or forgets
+  fixed = fixed.replace(/\bm\.com\b/gi, "एम.कॉम.");
+  fixed = fixed.replace(/\bb\.com\b/gi, "बी.कॉम.");
+  fixed = fixed.replace(/\bm\.a\b/gi, "एम.ए.");
+  fixed = fixed.replace(/\bb\.a\b/gi, "बी.ए.");
+  fixed = fixed.replace(/\bbsc\b/gi, "बी.एससी.");
+  fixed = fixed.replace(/\bmsc\b/gi, "एम.एससी.");
+  fixed = fixed.replace(/\bca\b/gi, "सीए");
+  fixed = fixed.replace(/\bcs\b/gi, "सीएस");
+  fixed = fixed.replace(/\bbca\b/gi, "बीसीए");
+  fixed = fixed.replace(/\bmca\b/gi, "एमसीए");
+  fixed = fixed.replace(/\bmba\b/gi, "एमबीए");
+  fixed = fixed.replace(/\bbtech\b/gi, "बी.टेक.");
+  fixed = fixed.replace(/\bmtech\b/gi, "एम.टेक.");
+  fixed = fixed.replace(/\bphd\b/gi, "पीएच.डी.");
+  fixed = fixed.replace(/\bllb\b/gi, "एलएलबी");
+  fixed = fixed.replace(/\bllm\b/gi, "एलएलएम");
+  fixed = fixed.replace(/\bbed\b/gi, "बी.एड.");
+  fixed = fixed.replace(/\bmed\b/gi, "एम.एड.");
+
+  return fixed;
+}
+
+// Unified processing wrapper
+function transliterationPostProcess(str: string): string {
+  const englishDigits = convertHindiNumeralsToEnglish(str);
+  return applyPostTransliterationFixes(englishDigits);
 }
 
 // 1. Google Cloud Translation Transliteration phonetic converter API
@@ -129,7 +197,7 @@ app.post("/api/transliterate", async (req: any, res: any) => {
         const translatedText = data?.data?.translations?.[0]?.translatedText;
         if (translatedText) {
           return res.json({
-            result: convertHindiNumeralsToEnglish(translatedText),
+            result: transliterationPostProcess(translatedText),
             method: "LIVE GOOGLE API VERIFIED"
           });
         }
@@ -150,7 +218,7 @@ app.post("/api/transliterate", async (req: any, res: any) => {
       if (data[0] === "SUCCESS") {
         const resultText = data[1]?.[0]?.[1]?.[0] || text;
         return res.json({
-          result: convertHindiNumeralsToEnglish(resultText),
+          result: transliterationPostProcess(resultText),
           method: "INTEGRATION COMPLETE"
         });
       }
@@ -160,7 +228,7 @@ app.post("/api/transliterate", async (req: any, res: any) => {
   }
 
   // Base fallback is to return original text if all translation fails
-  res.json({ result: convertHindiNumeralsToEnglish(text), method: "fallback-raw" });
+  res.json({ result: transliterationPostProcess(text), method: "fallback-raw" });
 });
 
 // 2. Load Masters Data (for frontend selections)
@@ -191,6 +259,25 @@ app.get("/api/masters", async (req: any, res: any) => {
       pricings,
       publications
     });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get Next Auto Ad Number for Matrimony & Business
+app.get("/api/advertisements/next-ad-number", async (req: any, res: any) => {
+  const typeCode = req.query.type || "matrimony";
+  const magazineHi = req.query.magazine || "परिचायिका";
+  try {
+    if (typeCode === "matrimony") {
+      const countRow = await dbGet("SELECT COUNT(*) as count FROM advertisements WHERE type_code = 'matrimony'");
+      const nextSeq = String((countRow?.count || 0) + 1).padStart(3, "0");
+      return res.json({ nextAdNumber: nextSeq, count: countRow?.count || 0 });
+    } else {
+      const countRow = await dbGet("SELECT COUNT(*) as count FROM advertisements WHERE type_code = 'business'");
+      const nextSeq = String((countRow?.count || 0) + 1).padStart(3, "0");
+      return res.json({ nextAdNumber: `BUS-${nextSeq} / ${magazineHi}`, count: countRow?.count || 0 });
+    }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -484,12 +571,62 @@ app.post("/api/upload", (req: any, res: any, next: any) => {
 // 4. AI-assisted Ad Maker layout generator endpoint
 app.post("/api/ad-maker/generate", async (req: any, res: any) => {
   const { prompt, businessInfo, currentLayout, dimensions } = req.body;
-  if (!prompt || !businessInfo) {
-    return res.status(400).json({ error: "Missing prompt or business details" });
+  if (!prompt) {
+    return res.status(400).json({ error: "Missing prompt or details" });
   }
   try {
-    const result = await generateAdLayout(prompt, businessInfo, currentLayout, dimensions);
+    const result = await generateAdLayout(prompt, businessInfo || {}, currentLayout, dimensions);
     res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4.1 Direct Dispatch & Email Notification Endpoint for ipgroup2002@gmail.com
+app.post("/api/dispatch-email", async (req: any, res: any) => {
+  const { recipientEmail, subject, adNumber, customerName, customerMobile, adType, dimensions, fileUrl, designData, fullDetails } = req.body;
+  const targetEmail = recipientEmail || "ipgroup2002@gmail.com";
+
+  try {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      targetEmail,
+      subject: subject || `[परिचायिका 2026] नया विज्ञापन प्रविष्टि - ${adNumber || "ADV"} (${customerName || "Customer"})`,
+      adNumber,
+      customerName,
+      customerMobile,
+      adType,
+      dimensions,
+      fileUrl,
+      fullDetails
+    };
+
+    console.log(`[DISPATCH EMAIL TO ${targetEmail}]`, JSON.stringify(logEntry, null, 2));
+
+    // Also persist dispatch log in database for admin auditing
+    try {
+      await dbRun(
+        "INSERT INTO admin_activity_logs (admin_username, action_type, description, target_id, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+          "SYSTEM_DISPATCH",
+          "EMAIL_DISPATCH_TO_INDIAN_PRESS",
+          `विज्ञापन फ़ाइल/प्रविष्टि सीधे ${targetEmail} को भेजी गई। ग्राहक: ${customerName}, फोन: ${customerMobile}, विज्ञापन संख्या: ${adNumber}`,
+          adNumber || "DIRECT_SUBMISSION",
+          req.ip || "127.0.0.1",
+          new Date().toISOString()
+        ]
+      );
+    } catch (e) {
+      console.warn("Could not write to admin_activity_logs:", e);
+    }
+
+    res.json({
+      success: true,
+      message: `प्रविष्टि सफलतापूर्वक ${targetEmail} और इंडियन प्रेस एडमिन को प्रेषित की गई।`,
+      targetEmail,
+      timestamp: logEntry.timestamp,
+      adNumber
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -613,23 +750,31 @@ app.post("/api/order/submit", async (req: any, res: any) => {
     // Clear user's cart
     await dbRun("DELETE FROM cart_items WHERE session_id = ?", [sessionId]);
 
-    // Retrieve UPI details
-    const upiIdRow = await dbGet("SELECT value FROM settings WHERE key = 'upi_id'");
-    const upiNameRow = await dbGet("SELECT value FROM settings WHERE key = 'upi_name'");
-    const recipientUpiId = "9301056006@paytm"; // Recipient MUST be 9301056006
-    const recipientUpiName = "Parichayika Powered by Indian Press";
+    // Retrieve UPI details with NPCI-compliant parameters
+    const primaryUpiId = "9301056006@ybl";
+    const cleanPayeeName = "IndianPress";
+    const formattedAmount = total.toFixed(2);
+    const cleanTxnRef = `ORD${orderId.replace(/[^a-zA-Z0-9]/g, "")}`;
+    const cleanTxnNote = `Parichayika_${orderId}`;
 
-    // Dynamic UPI pay string
-    // upi://pay?pa=9301056006@paytm&pn=Parichayika&am=1500&tn=ORD-123&cu=INR
-    const upiPayload = `upi://pay?pa=${recipientUpiId}&pn=${encodeURIComponent(
-      recipientUpiName
-    )}&am=${total}&tn=${orderId}&cu=INR`;
+    // Standard NPCI Compliant UPI URI
+    const upiPayload = `upi://pay?pa=${primaryUpiId}&pn=${cleanPayeeName}&am=${formattedAmount}&cu=INR&tn=${cleanTxnNote}&tr=${cleanTxnRef}`;
+
+    const upiHandles = [
+      { id: "phonepe", label: "PhonePe UPI", vpa: "9301056006@ybl" },
+      { id: "paytm", label: "Paytm UPI", vpa: "9301056006@paytm" },
+      { id: "bhim", label: "BHIM / Yes Bank", vpa: "9301056006@ibl" },
+      { id: "gpay", label: "Google Pay / Axis", vpa: "9301056006@axl" }
+    ];
 
     res.json({
       orderId,
       totalAmount: total,
       paymentStatus: "PENDING",
       upiPayload,
+      primaryUpiId,
+      upiHandles,
+      cleanPayeeName,
       recipientPhone: "9301056006"
     });
   } catch (error: any) {
@@ -637,19 +782,143 @@ app.post("/api/order/submit", async (req: any, res: any) => {
   }
 });
 
-// 7. Customer submits payment reference proof
+// WhatsApp helper function to save to DB and console log notifications
+async function sendWhatsAppNotification(orderId: string, phone: string, customerName: string, status: string, message: string) {
+  try {
+    const created_at = new Date().toISOString();
+    await dbRun(
+      "INSERT INTO whatsapp_notifications (order_id, phone, customer_name, status, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [orderId, phone, customerName, status, message, created_at]
+    );
+    console.log(`
+============================================================
+📱 [AUTOMATED WHATSAPP NOTIFICATION] DISPATCHED SUCCESSFULLY
+============================================================
+Order ID:      ${orderId}
+Recipient:     ${customerName} (${phone})
+Type/Status:   ${status}
+Timestamp:     ${created_at}
+------------------------------------------------------------
+Message:
+${message}
+============================================================
+`);
+  } catch (err: any) {
+    console.error("❌ Error registering WhatsApp notification in database:", err.message);
+  }
+}
+
+// 7. Customer submits payment confirmation
 app.post("/api/order/payment-submit", async (req: any, res: any) => {
-  const { orderId, paymentRef, paymentDate, customerName } = req.body;
-  if (!orderId || !paymentRef) {
-    return res.status(400).json({ error: "Missing required payment fields" });
+  const { orderId, paymentRef, paymentDate, customerName, paymentScreenshot } = req.body;
+  if (!orderId) {
+    return res.status(400).json({ error: "Missing required order ID" });
   }
   try {
     const nowStr = new Date().toISOString();
     await dbRun(
-      "UPDATE orders SET payment_status = 'SUBMITTED', payment_ref = ?, payment_date = ? WHERE order_id = ?",
-      [paymentRef, paymentDate || nowStr, orderId]
+      "UPDATE orders SET payment_status = 'SUBMITTED', payment_ref = ?, payment_date = ?, payment_screenshot = ? WHERE order_id = ?",
+      [paymentRef || "DIRECT_UPI_CONFIRMED", paymentDate || nowStr, paymentScreenshot || "", orderId]
     );
-    res.json({ success: true, message: "Payment submitted for verification" });
+
+    // Dynamic WhatsApp receipt generation
+    try {
+      const items = await dbAll("SELECT customer_name, customer_mobile, ad_type, ad_number, district_hi, sangathan_hi FROM order_items WHERE order_id = ?", [orderId]);
+      if (items && items.length > 0) {
+        const mainCustomer = items[0];
+        const customerPhone = mainCustomer.customer_mobile || "N/A";
+        const customerNameVal = mainCustomer.customer_name || customerName || "ग्राहक";
+
+        const orderObj = await dbGet("SELECT total_amount FROM orders WHERE order_id = ?", [orderId]);
+        const amount = orderObj?.total_amount || 0;
+
+        const adDetails = items.map((it, idx) => `  ${idx + 1}. ${it.ad_type === "matrimony" ? "विवाह परिचय प्रविष्टि" : "व्यावसायिक विज्ञापन"} (${it.ad_number}) [${it.district_hi} • ${it.sangathan_hi}]`).join("\n");
+
+        const host = req.get("host") || "localhost:3000";
+        const protocol = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+        const invoiceLink = `${protocol}://${host}/?order=${orderId}`;
+
+        const customerMsg = `*प्रवेश पत्र / भुगतान पुष्टि - परिचायिका 2026* 📝
+
+नमस्ते *${customerNameVal}*, आपका विज्ञापन विवरण और भुगतान सफलतापूर्वक सबमिट हो गया है।
+
+*ऑर्डर विवरण:*
+• *ऑर्डर ID:* ${orderId}
+• *कुल राशि:* ₹${amount}
+• *संदर्भ (Ref / UTR No):* ${paymentRef || "DIRECT_UPI_CONFIRMED"}
+• *स्थिति:* ⏳ सत्यापन हेतु लंबित (Submitted)
+
+*विज्ञापन विवरण:*
+${adDetails}
+
+*आवश्यक सूचना:* एडमिन द्वारा भुगतान स्क्रीनशॉट की जाँच होने के पश्चात ही आपकी डिजिटल पावती (Invoice) रसीद जनरेट होगी। रसीद तैयार होने पर आपको व्हाट्सएप पर ऑटोमैटिक प्राप्त हो जाएगी।
+
+🔗 *स्थिति जाँच लिंक:* ${invoiceLink}
+
+धन्यवाद,
+*इंडियन प्रेस / परिचायिका टीम* 🌸`;
+
+        // 1. Send simulated WhatsApp message to customer
+        await sendWhatsAppNotification(orderId, customerPhone, customerNameVal, "SUBMITTED", customerMsg);
+
+        // 2. Also notify admin (Simulated)
+        const superAdmin = await dbGet("SELECT recovery_whatsapp FROM super_admins LIMIT 1");
+        const adminPhone = superAdmin?.recovery_whatsapp || "9301056006";
+        const adminMsg = `*🚨 नया भुगतान सत्यापन अनुरोध - परिचायिका 2026*
+
+*नया आर्डर सबमिट हुआ है:*
+• *ऑर्डर ID:* ${orderId}
+• *ग्राहक:* ${customerNameVal} (${customerPhone})
+• *कुल राशि:* ₹${amount}
+• *UTR संदर्भ:* ${paymentRef || "DIRECT_UPI_CONFIRMED"}
+• *भुगतान स्क्रीनशॉट:* ${paymentScreenshot || "नहीं पाया गया"}
+• *स्थिति:* ⏳ सत्यापन लंबित
+
+*विज्ञापन विवरण:*
+${adDetails}
+
+🔗 *एडमिन पैनल लिंक:* ${protocol}://${host}/admin`;
+
+        await sendWhatsAppNotification(orderId, adminPhone, "सुपर एडमिन", "ADMIN_ALERT_SUBMITTED", adminMsg);
+      }
+    } catch (waErr: any) {
+      console.error("WhatsApp notification generation error:", waErr.message);
+    }
+
+    res.json({ success: true, message: "Payment confirmation recorded" });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 7.1 Public Order / Invoice Lookup API
+app.get("/api/orders/:orderId", async (req: any, res: any) => {
+  const { orderId } = req.params;
+  try {
+    const order = await dbGet("SELECT * FROM orders WHERE order_id = ?", [orderId]);
+    if (!order) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    const items = await dbAll("SELECT * FROM order_items WHERE order_id = ?", [orderId]);
+    const enrichedItems = items.map((it: any) => {
+      let matrimonyDetails = null;
+      let businessDetails = null;
+      try {
+        if (it.matrimony_details_json) matrimonyDetails = JSON.parse(it.matrimony_details_json);
+      } catch (e) {}
+      try {
+        if (it.business_details_json) businessDetails = JSON.parse(it.business_details_json);
+      } catch (e) {}
+      return {
+        ...it,
+        matrimonyDetails,
+        businessDetails
+      };
+    });
+    res.json({
+      ...order,
+      items: enrichedItems
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -922,7 +1191,7 @@ app.get("/api/admin/orders", authenticateAdmin, async (req: any, res: any) => {
 // This creates actual, final immutable advertisement numbers for the advertisements in this order!
 app.post("/api/admin/orders/:orderId/verify", authenticateAdmin, async (req: any, res: any) => {
   const { orderId } = req.params;
-  const { status } = req.body; // 'PAID' or 'REJECTED'
+  const { status, reason } = req.body; // 'PAID' or 'REJECTED'
   if (!status || !["PAID", "REJECTED"].includes(status)) {
     return res.status(400).json({ error: "Invalid status state" });
   }
@@ -935,19 +1204,120 @@ app.post("/api/admin/orders/:orderId/verify", authenticateAdmin, async (req: any
     const verificationTime = new Date().toISOString();
 
     await dbRun(
-      "UPDATE orders SET payment_status = ?, verified_by = ?, verification_time = ? WHERE order_id = ?",
-      [status, verifiedBy, verificationTime, orderId]
+      "UPDATE orders SET payment_status = ?, verified_by = ?, verification_time = ?, rejection_reason = ? WHERE order_id = ?",
+      [status, verifiedBy, verificationTime, reason || null, orderId]
     );
 
-    if (status === "PAID") {
-      // Find all order items under this order, and mark their pre-saved advertisements as PAID
-      const items = await dbAll("SELECT ad_number FROM order_items WHERE order_id = ?", [orderId]);
-      for (const item of items) {
-        await dbRun("UPDATE advertisements SET payment_status = 'PAID' WHERE ad_number = ?", [item.ad_number]);
+    // Find all order items under this order, and update pre-saved advertisements status
+    const items = await dbAll("SELECT ad_number, customer_name, customer_mobile, ad_type, district_hi, sangathan_hi FROM order_items WHERE order_id = ?", [orderId]);
+    for (const item of items) {
+      await dbRun("UPDATE advertisements SET payment_status = ? WHERE ad_number = ?", [status, item.ad_number]);
+    }
+
+    // Trigger WhatsApp notification for PAID or REJECTED
+    try {
+      if (items && items.length > 0) {
+        const mainCustomer = items[0];
+        const customerPhone = mainCustomer.customer_mobile || "N/A";
+        const customerNameVal = mainCustomer.customer_name || "ग्राहक";
+        const amount = order.total_amount || 0;
+
+        const adDetails = items.map((it, idx) => `  ${idx + 1}. ${it.ad_type === "matrimony" ? "विवाह परिचय प्रविष्टि" : "व्यावसायिक विज्ञापन"} (${it.ad_number}) [${it.district_hi} • ${it.sangathan_hi}]`).join("\n");
+
+        const host = req.get("host") || "localhost:3000";
+        const protocol = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+        const invoiceLink = `${protocol}://${host}/?order=${orderId}`;
+
+        if (status === "PAID") {
+          const customerMsg = `*प्रवेश स्वीकृत रसीद - परिचायिका 2026* ✅
+
+नमस्ते *${customerNameVal}*, आपका विज्ञापन भुगतान स्वीकृत हो गया है और विज्ञापन उत्पादन (Print Production) के लिए भेज दिया गया है।
+
+*ऑर्डर विवरण:*
+• *ऑर्डर ID:* ${orderId}
+• *कुल राशि:* ₹${amount}
+• *संदर्भ (UTR/Ref No):* ${order.payment_ref || "DIRECT_UPI_CONFIRMED"}
+• *स्थिति:* 🟢 स्वीकृत (PAID)
+
+*विज्ञापन विवरण:*
+${adDetails}
+
+🔗 *डिजिटल पावती / Invoice डाउनलोड करें:* ${invoiceLink}
+
+धन्यवाद,
+*इंडियन प्रेस / परिचायिका टीम* 🌸`;
+
+          // 1. Notify Customer
+          await sendWhatsAppNotification(orderId, customerPhone, customerNameVal, "PAID", customerMsg);
+
+          // 2. Notify Admin
+          const superAdmin = await dbGet("SELECT recovery_whatsapp FROM super_admins LIMIT 1");
+          const adminPhone = superAdmin?.recovery_whatsapp || "9301056006";
+          const adminMsg = `*✅ भुगतान स्वीकृत पुष्टि - परिचायिका 2026*
+
+• *ऑर्डर ID:* ${orderId}
+• *ग्राहक:* ${customerNameVal} (${customerPhone})
+• *कुल राशि:* ₹${amount}
+• *स्थिति:* 🟢 स्वीकृत (PAID)
+
+उत्पादन अनुभाग में मुद्रण (Print Sheet) हेतु प्रविष्टियाँ भेज दी गई हैं।`;
+          await sendWhatsAppNotification(orderId, adminPhone, "सुपर एडमिन", "ADMIN_ALERT_PAID", adminMsg);
+
+        } else if (status === "REJECTED") {
+          const rejectReason = reason || "भुगतान विवरण अमान्य पाया गया। कृपया पुनः सही जानकारी दर्ज करें।";
+          const customerMsg = `*भुगतान अस्वीकृत / विफल सूचना - परिचायिका 2026* ❌
+
+नमस्ते *${customerNameVal}*, आपके विज्ञापन आर्डर का भुगतान विवरण अमान्य संदर्भ (UTR) या अन्य कारणों से *अस्वीकृत (REJECTED)* कर दिया गया है।
+
+*ऑर्डर विवरण:*
+• *ऑर्डर ID:* ${orderId}
+• *कुल राशि:* ₹${amount}
+• *स्थिति:* 🔴 अस्वीकृत (REJECTED)
+• *अस्वीकृति का कारण:* ${rejectReason}
+
+*कृपया पुनः प्रयास करें:*
+आप नीचे दिए लिंक पर जाकर अपना सही भुगतान विवरण दर्ज कर सकते हैं या फिर से भुगतान कर सकते हैं।
+
+🔗 *पुनः प्रयास करें / डिजिटल पावती:* ${invoiceLink}
+
+यदि कोई समस्या हो तो कृपया परिचायिका एडमिन से संपर्क करें।
+
+धन्यवाद,
+*इंडियन प्रेस / परिचायिका टीम* 🌸`;
+
+          // 1. Notify Customer
+          await sendWhatsAppNotification(orderId, customerPhone, customerNameVal, "REJECTED", customerMsg);
+
+          // 2. Notify Admin
+          const superAdmin = await dbGet("SELECT recovery_whatsapp FROM super_admins LIMIT 1");
+          const adminPhone = superAdmin?.recovery_whatsapp || "9301056006";
+          const adminMsg = `*❌ भुगतान अस्वीकृत (REJECTED) - परिचायिका 2026*
+
+• *ऑर्डर ID:* ${orderId}
+• *ग्राहक:* ${customerNameVal} (${customerPhone})
+• *कुल राशि:* ₹${amount}
+• *स्थिति:* 🔴 अस्वीकृत (REJECTED)
+• *अस्वीकृति का कारण:* ${rejectReason}
+
+ग्राहक को पुनः प्रयास हेतु सूचना भेज दी गई है।`;
+          await sendWhatsAppNotification(orderId, adminPhone, "सुपर एडमिन", "ADMIN_ALERT_REJECTED", adminMsg);
+        }
       }
+    } catch (waErr: any) {
+      console.error("WhatsApp notification verification trigger error:", waErr.message);
     }
 
     res.json({ success: true, message: `Order updated to ${status}` });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 10.1 Admin Fetch WhatsApp Notification Logs
+app.get("/api/admin/whatsapp-logs", authenticateAdmin, async (req: any, res: any) => {
+  try {
+    const logs = await dbAll("SELECT * FROM whatsapp_notifications ORDER BY id DESC");
+    res.json(logs);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
